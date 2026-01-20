@@ -10,33 +10,33 @@ ADMIN_ID = int(os.getenv("ADMIN_ID"))
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-DATA_FILE = "state.json"
 CSV_FILE = "quiz.csv"
+STATE_FILE = "state.json"
 
 questions = []
 current_question = 0
 scores = {}
 poll_correct = {}
+quiz_running = False
 
-# ---------- STATE SAVE / LOAD ----------
+# ---------- STATE ----------
 
 def save_state():
-    data = {
-        "current_question": current_question,
-        "scores": scores
-    }
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
+    with open(STATE_FILE, "w") as f:
+        json.dump({
+            "current_question": current_question,
+            "scores": scores
+        }, f)
 
 def load_state():
     global current_question, scores
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE) as f:
             data = json.load(f)
             current_question = data.get("current_question", 0)
             scores = data.get("scores", {})
 
-# ---------- CSV LOAD ----------
+# ---------- CSV ----------
 
 def load_csv():
     questions.clear()
@@ -53,36 +53,44 @@ async def start(message: types.Message):
 
 @dp.message_handler(commands=["startquiz"])
 async def start_quiz(message: types.Message):
-    global current_question, scores
+    global current_question, scores, quiz_running
 
     if message.from_user.id != ADMIN_ID:
         return
 
     if not os.path.exists(CSV_FILE):
-        await message.reply("❌ CSV file upload nahi hai")
+        await message.reply("❌ CSV upload nahi hua")
         return
 
+    quiz_running = False  # stop old quiz
+    await asyncio.sleep(1)
+
+    load_csv()
     current_question = 0
     scores = {}
-    load_csv()
+    quiz_running = True
     save_state()
 
-    await message.reply("▶ Quiz Started")
-    await send_question(message.chat.id)
+    await message.reply("▶ New Quiz Started")
+    await quiz_loop(message.chat.id)
 
 @dp.message_handler(commands=["resumequiz"])
 async def resume_quiz(message: types.Message):
+    global quiz_running
+
     if message.from_user.id != ADMIN_ID:
         return
 
-    if not os.path.exists(DATA_FILE):
+    if not os.path.exists(STATE_FILE):
         await message.reply("❌ Resume data nahi mila")
         return
 
-    load_state()
     load_csv()
+    load_state()
+    quiz_running = True
+
     await message.reply("⏯ Quiz Resumed")
-    await send_question(message.chat.id)
+    await quiz_loop(message.chat.id)
 
 # ---------- CSV UPLOAD ----------
 
@@ -98,37 +106,44 @@ async def upload_csv(message: types.Message):
     file = await bot.get_file(message.document.file_id)
     await bot.download_file(file.file_path, CSV_FILE)
 
-    await message.reply("✅ CSV Uploaded Successfully")
+    if os.path.exists(STATE_FILE):
+        os.remove(STATE_FILE)
 
-# ---------- QUIZ FLOW ----------
+    await message.reply("✅ New CSV uploaded & old quiz reset")
 
-async def send_question(chat_id):
-    global current_question
+# ---------- QUIZ LOOP ----------
 
-    if current_question >= len(questions):
+async def quiz_loop(chat_id):
+    global current_question, quiz_running
+
+    while quiz_running and current_question < len(questions):
+        q = questions[current_question]
+        options = [q["option_a"], q["option_b"], q["option_c"], q["option_d"]]
+        correct = ord(q["answer"].upper()) - 65
+
+        poll = await bot.send_poll(
+            chat_id,
+            q["question"],
+            options,
+            type="quiz",
+            correct_option_id=correct,
+            is_anonymous=False,
+            open_period=15
+        )
+
+        poll_correct[poll.poll.id] = correct
+        current_question += 1
+        save_state()
+
+        await asyncio.sleep(16)
+
+    if quiz_running:
         await show_result(chat_id)
-        return
+        quiz_running = False
+        if os.path.exists(STATE_FILE):
+            os.remove(STATE_FILE)
 
-    q = questions[current_question]
-    options = [q["option_a"], q["option_b"], q["option_c"], q["option_d"]]
-    correct = ord(q["answer"].upper()) - 65
-
-    poll = await bot.send_poll(
-        chat_id,
-        q["question"],
-        options,
-        type="quiz",
-        correct_option_id=correct,
-        is_anonymous=False,
-        open_period=15
-    )
-
-    poll_correct[poll.poll.id] = correct
-    current_question += 1
-    save_state()
-
-    await asyncio.sleep(16)
-    await send_question(chat_id)
+# ---------- ANSWERS ----------
 
 @dp.poll_answer_handler()
 async def handle_answer(poll_answer: types.PollAnswer):
@@ -148,7 +163,7 @@ async def handle_answer(poll_answer: types.PollAnswer):
 
 async def show_result(chat_id):
     if not scores:
-        await bot.send_message(chat_id, "No participants")
+        await bot.send_message(chat_id, "❌ No participants")
         return
 
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
@@ -161,9 +176,6 @@ async def show_result(chat_id):
         rank += 1
 
     await bot.send_message(chat_id, text)
-
-    if os.path.exists(DATA_FILE):
-        os.remove(DATA_FILE)
 
 # ---------- START ----------
 
