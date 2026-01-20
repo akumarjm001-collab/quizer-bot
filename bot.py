@@ -2,6 +2,7 @@ import csv
 import asyncio
 import os
 import json
+import io
 from aiogram import Bot, Dispatcher, executor, types
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -10,14 +11,13 @@ ADMIN_ID = int(os.getenv("ADMIN_ID"))
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-CSV_FILE = "quiz.csv"
-STATE_FILE = "state.json"
-
 questions = []
 current_question = 0
 scores = {}
 poll_correct = {}
 quiz_running = False
+
+STATE_FILE = "state.json"
 
 # ---------- STATE ----------
 
@@ -36,20 +36,11 @@ def load_state():
             current_question = data.get("current_question", 0)
             scores = data.get("scores", {})
 
-# ---------- CSV ----------
-
-def load_csv():
-    questions.clear()
-    with open(CSV_FILE, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            questions.append(row)
-
 # ---------- COMMANDS ----------
 
 @dp.message_handler(commands=["start"])
 async def start(message: types.Message):
-    await message.reply("✅ Quizer Bot Ready")
+    await message.reply("✅ Quizer Bot Ready\nCSV bhejo phir /startquiz")
 
 @dp.message_handler(commands=["startquiz"])
 async def start_quiz(message: types.Message):
@@ -58,20 +49,19 @@ async def start_quiz(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    if not os.path.exists(CSV_FILE):
-        await message.reply("❌ CSV upload nahi hua")
+    if not questions:
+        await message.reply("❌ Pehle CSV upload karo")
         return
 
-    quiz_running = False  # stop old quiz
+    quiz_running = False
     await asyncio.sleep(1)
 
-    load_csv()
     current_question = 0
     scores = {}
     quiz_running = True
     save_state()
 
-    await message.reply("▶ New Quiz Started")
+    await message.reply("▶ Quiz Started")
     await quiz_loop(message.chat.id)
 
 @dp.message_handler(commands=["resumequiz"])
@@ -81,21 +71,21 @@ async def resume_quiz(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    if not os.path.exists(STATE_FILE):
-        await message.reply("❌ Resume data nahi mila")
+    if not questions:
+        await message.reply("❌ CSV missing, dobara upload karo")
         return
 
-    load_csv()
     load_state()
     quiz_running = True
-
     await message.reply("⏯ Quiz Resumed")
     await quiz_loop(message.chat.id)
 
-# ---------- CSV UPLOAD ----------
+# ---------- CSV UPLOAD (MEMORY) ----------
 
 @dp.message_handler(content_types=types.ContentType.DOCUMENT)
 async def upload_csv(message: types.Message):
+    global questions
+
     if message.from_user.id != ADMIN_ID:
         return
 
@@ -104,12 +94,17 @@ async def upload_csv(message: types.Message):
         return
 
     file = await bot.get_file(message.document.file_id)
-    await bot.download_file(file.file_path, CSV_FILE)
+    file_bytes = await bot.download_file(file.file_path)
+
+    decoded = file_bytes.read().decode("utf-8")
+    reader = csv.DictReader(io.StringIO(decoded))
+
+    questions = list(reader)
 
     if os.path.exists(STATE_FILE):
         os.remove(STATE_FILE)
 
-    await message.reply("✅ New CSV uploaded & old quiz reset")
+    await message.reply(f"✅ CSV Loaded ({len(questions)} questions)")
 
 # ---------- QUIZ LOOP ----------
 
@@ -169,11 +164,9 @@ async def show_result(chat_id):
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
     text = "🏆 QUIZ RESULT 🏆\n\n"
-    rank = 1
-    for uid, score in sorted_scores[:10]:
+    for i, (uid, score) in enumerate(sorted_scores[:10], start=1):
         user = await bot.get_chat(int(uid))
-        text += f"{rank}. {user.first_name} — {score}/{len(questions)}\n"
-        rank += 1
+        text += f"{i}. {user.first_name} — {score}/{len(questions)}\n"
 
     await bot.send_message(chat_id, text)
 
