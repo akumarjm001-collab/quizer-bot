@@ -1,9 +1,11 @@
 import csv
 import asyncio
+import os
 from aiogram import Bot, Dispatcher, executor, types
 
-BOT_TOKEN = "8197343104:AAEM8Kt9z_CqauTJFbsc3dqy5fMIoE-riJg"   # ← apna real token yahan paste karo
-ADMIN_ID = 1692919993     # ← apna Telegram User ID yahan paste karo
+# 🔐 ENV VARIABLES (Render se aayenge)
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
@@ -18,8 +20,8 @@ def load_csv():
             questions.append(row)
 
 @dp.message_handler(commands=["start"])
-async def start(message: types.Message):
-    await message.reply("✅ Quizer Bot Ready\nUse /startquiz")
+async def start_cmd(message: types.Message):
+    await message.reply("✅ Quizer Bot is LIVE\nUse /startquiz")
 
 @dp.message_handler(commands=["startquiz"])
 async def start_quiz(message: types.Message):
@@ -36,7 +38,7 @@ async def start_quiz(message: types.Message):
             q["option_d"]
         ]
 
-        correct = ord(q["answer"].upper()) - 65
+        correct = ord(q["answer"].strip().upper()) - 65
 
         await bot.send_poll(
             chat_id=message.chat.id,
@@ -51,4 +53,4 @@ async def start_quiz(message: types.Message):
         await asyncio.sleep(16)
 
 if __name__ == "__main__":
-    executor.start_polling(dp)
+    executor.start_polling(dp, skip_updates=True)
